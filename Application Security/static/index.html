@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supply Chain Security Attestation Engine & Visualizer</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Vis-Network CDN for high-performance dependency graph visualization -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+</head>
+<body>
+
+    <header>
+        <div class="logo-container">
+            <div class="logo-icon"></div>
+            <h1>Supply Chain Attestation Engine</h1>
+        </div>
+        
+        <div class="tools-status-badge">
+            <div class="tool-indicator" id="syft-badge">
+                <span class="status-dot missing" id="syft-dot"></span>
+                Syft: <span id="syft-text">Checking...</span>
+                <button class="btn-setup" id="btn-install-syft" style="display:none;" onclick="triggerInstall('syft')">Install</button>
+            </div>
+            <div class="tool-indicator" id="cosign-badge">
+                <span class="status-dot missing" id="cosign-dot"></span>
+                Cosign: <span id="cosign-text">Checking...</span>
+                <button class="btn-setup" id="btn-install-cosign" style="display:none;" onclick="triggerInstall('cosign')">Install</button>
+            </div>
+        </div>
+    </header>
+
+    <main class="dashboard-grid">
+        <!-- Sidebar Controls -->
+        <section class="control-sidebar">
+            <!-- Scan Config -->
+            <div class="glass-card">
+                <h3 class="section-title">Scan Configuration</h3>
+                <div class="form-group">
+                    <label for="scan-mode">Scan Mode</label>
+                    <select id="scan-mode" class="select-box" onchange="toggleScanMode()">
+                        <option value="remote" selected>GitHub Repository</option>
+                        <option value="local">Local Folder Path</option>
+                    </select>
+                </div>
+                <div class="form-group" id="group-repo-url">
+                    <label for="repo-url">GitHub Repository URL</label>
+                    <input type="text" id="repo-url" class="input-text" placeholder="https://github.com/owner/repo" value="https://github.com/django/django">
+                </div>
+                <div class="form-group" id="group-local-path" style="display: none;">
+                    <label for="local-path">Local Folder Path</label>
+                    <input type="text" id="local-path" class="input-text" placeholder="e.g., C:\Users\KICHU\Projects\my-app">
+                </div>
+                <div class="form-group">
+                    <label for="block-threshold">Build Block Policy</label>
+                    <select id="block-threshold" class="select-box">
+                        <option value="CRITICAL" selected>Block on Critical Risks (Recommended)</option>
+                        <option value="HIGH">Block on High & Above</option>
+                        <option value="MEDIUM">Block on Medium & Above</option>
+                        <option value="LOW">Block on Low & Above (Strict)</option>
+                        <option value="NONE">Audit Only (No Blocking)</option>
+                    </select>
+                </div>
+                <button id="btn-scan" class="btn-primary" onclick="initiateScan()">
+                    <span>Scan Project</span>
+                </button>
+            </div>
+
+            <!-- Terminal Logs -->
+            <div class="glass-card console-card">
+                <h3 class="section-title">Attestation Process Log</h3>
+                <div class="console-output" id="console-logs">
+                    <div class="console-log"><span class="pulse-log-dot"></span>System ready. Awaiting scan initialization...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Visualizer Dashboard -->
+        <section class="visualizer-container">
+            <!-- Summary Stats Widgets -->
+            <div class="summary-grid" style="grid-template-columns: repeat(5, 1fr);">
+                <div class="summary-widget verdict-widget" id="widget-verdict">
+                    <div class="widget-value" id="val-verdict">AWAITING</div>
+                    <div class="widget-label">Build Attestation</div>
+                </div>
+                <div class="summary-widget">
+                    <div class="widget-value" id="val-slsa" style="font-size: 15px; margin-top: 5px; color: var(--accent-cyan);">Level 0</div>
+                    <div class="widget-label">SLSA Provenance</div>
+                </div>
+                <div class="summary-widget">
+                    <div class="widget-value" id="val-deps">0</div>
+                    <div class="widget-label">Dependencies</div>
+                </div>
+                <div class="summary-widget">
+                    <div class="widget-value" id="val-vulns">0</div>
+                    <div class="widget-label">Vulnerabilities</div>
+                </div>
+                <div class="summary-widget risk-index-widget">
+                    <div class="widget-value" id="val-risk">-</div>
+                    <div class="widget-label">Overall Risk Score</div>
+                </div>
+            </div>
+
+            <!-- Graph Canvas & Drawer -->
+            <div class="graph-viewport-row">
+                <!-- Network Graph -->
+                <div class="glass-card graph-card">
+                    <div class="graph-controls">
+                        <button class="btn-icon" title="Reset View" onclick="resetGraphView()">🔄</button>
+                        <button class="btn-icon" title="Zoom In" onclick="zoomGraph(1.2)">➕</button>
+                        <button class="btn-icon" title="Zoom Out" onclick="zoomGraph(0.8)">➖</button>
+                    </div>
+                    <div id="graph-canvas">
+                        <div class="empty-placeholder">
+                            <span class="empty-icon">📊</span>
+                            <p>Dependency network graph will render here after scanning the repository.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Detail side drawer -->
+                <div class="glass-card drawer-card" id="detail-drawer">
+                    <div class="empty-placeholder" id="drawer-empty-state">
+                        <span class="empty-icon">🔍</span>
+                        <p>Click on any package node or catalog row to inspect digital signatures and vulnerability details.</p>
+                    </div>
+                    
+                    <div id="drawer-content" style="display:none;">
+                        <div class="drawer-header">
+                            <h4 class="drawer-title" id="drawer-pkg-name">package-name</h4>
+                            <div class="drawer-subtitle" id="drawer-pkg-version">version 1.0.0</div>
+                        </div>
+                        
+                        <div class="drawer-body">
+                            <div class="drawer-meta-item">
+                                <label>Ecosystem / Registry</label>
+                                <div class="drawer-meta-val" id="drawer-pkg-ecosystem">-</div>
+                            </div>
+                            
+                            <div class="drawer-meta-item">
+                                <label>Signature Status</label>
+                                <div class="drawer-meta-val" style="margin-top:6px;">
+                                    <span class="badge" id="drawer-sig-badge">Unsigned</span>
+                                </div>
+                                <div class="drawer-subtitle" id="drawer-sig-details" style="margin-top:6px; font-style:italic;">-</div>
+                            </div>
+
+                            <div class="drawer-meta-item">
+                                <label>Vulnerability Assessment</label>
+                                <div class="drawer-meta-val" style="margin-top:6px; font-weight:normal;" id="drawer-vuln-container">
+                                    No vulnerabilities found.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Package Catalog Table Section -->
+    <section class="glass-card catalog-section">
+        <div class="catalog-header">
+            <h3 class="section-title" style="margin-bottom:0;">Dependency Catalog</h3>
+            <div class="table-filter-group">
+                <input type="text" id="search-bar" class="search-input" placeholder="Search packages..." onkeyup="filterTable()">
+                <button class="btn-secondary" id="btn-compare-scans" onclick="openDiffModal()">
+                    🔀 <span>Compare Scans (Diff)</span>
+                </button>
+                <button class="btn-secondary" id="btn-download-report" disabled onclick="downloadReport()">
+                    📥 <span>Download Security Report</span>
+                </button>
+            </div>
+        </div>
+        
+        <div class="table-container">
+            <table class="premium-table" id="deps-table">
+                <thead>
+                    <tr>
+                        <th>Package</th>
+                        <th>Version</th>
+                        <th>Ecosystem</th>
+                        <th>Signature Attestation</th>
+                        <th>Vulnerability Count</th>
+                        <th>Risk Score</th>
+                    </tr>
+                </thead>
+                <tbody id="deps-table-body">
+                    <tr>
+                        <td colspan="6" style="text-align:center; color: var(--color-text-dim); padding: 30px;">
+                            No scanning data loaded. Complete a scan to populate the dependency catalog.
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <footer>
+        Antigravity Software Supply Chain Visualizer & Attestation Engine &copy; 2026
+    </footer>
+
+    <script>
+        let currentScanId = null;
+        let pollingInterval = null;
+        let visNetworkInstance = null;
+        let fullDependenciesData = [];
+        let visNodesDataset = null;
+        
+        // Initial setup on window load
+        window.addEventListener('load', () => {
+            checkSystemTools();
+            // Automatically run check periodically
+            setInterval(checkSystemTools, 20000);
+        });
+
+        // Query system dependencies status
+        async function checkSystemTools() {
+            try {
+                const response = await fetch('/api/tools');
+                const data = await response.json();
+                
+                updateToolBadge('syft', data.syft);
+                updateToolBadge('cosign', data.cosign);
+            } catch (err) {
+                console.error('Error fetching tool statuses:', err);
+            }
+        }
+
+        function updateToolBadge(name, info) {
+            const dot = document.getElementById(`${name}-dot`);
+            const txt = document.getElementById(`${name}-text`);
+            const btn = document.getElementById(`btn-install-${name}`);
+            
+            if (info.available) {
+                dot.className = "status-dot active";
+                txt.textContent = "Available";
+                btn.style.display = "none";
+            } else {
+                dot.className = "status-dot missing";
+                txt.textContent = "Missing (Fallback active)";
+                btn.style.display = "inline-block";
+            }
+        }
+
+        async function triggerInstall(tool) {
+            const btn = document.getElementById(`btn-install-${tool}`);
+            btn.textContent = "Installing...";
+            btn.disabled = true;
+            try {
+                const response = await fetch(`/api/tools/install/${tool}`, { method: 'POST' });
+                const res = await response.json();
+                appendConsoleLog(`[INFO] Tool installation triggered: ${res.message}`);
+                // Refresh after 5 seconds
+                setTimeout(checkSystemTools, 5000);
+            } catch (err) {
+                appendConsoleLog(`[ERROR] Failed to initiate installation of ${tool}: ${err.message}`, 'error');
+                btn.textContent = "Install";
+                btn.disabled = false;
+            }
+        }
+
+        // Output logger utilities
+        function appendConsoleLog(message, type = 'info') {
+            const container = document.getElementById('console-logs');
+            const cleanMsg = message.replace(/^\[[A-Z]+\]\s*/, '');
+            const div = document.createElement('div');
+            
+            div.className = `console-log ${type}`;
+            
+            let dot = "";
+            if (type === 'info' && message.includes('Starting') || message.includes('Cloning') || message.includes('Querying')) {
+                dot = `<span class="pulse-log-dot"></span>`;
+            }
+            
+            div.innerHTML = `${dot}${cleanMsg}`;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function toggleScanMode() {
+            const mode = document.getElementById('scan-mode').value;
+            if (mode === 'remote') {
+                document.getElementById('group-repo-url').style.display = 'block';
+                document.getElementById('group-local-path').style.display = 'none';
+            } else {
+                document.getElementById('group-repo-url').style.display = 'none';
+                document.getElementById('group-local-path').style.display = 'block';
+            }
+        }
+
+        // Start scanning execution
+        async function initiateScan() {
+            const scanMode = document.getElementById('scan-mode').value;
+            const repoUrl = document.getElementById('repo-url').value.trim();
+            const localPath = document.getElementById('local-path').value.trim();
+            const threshold = document.getElementById('block-threshold').value;
+            const btnScan = document.getElementById('btn-scan');
+            
+            let requestPayload = { block_threshold: threshold };
+            
+            if (scanMode === 'remote') {
+                if (!repoUrl) {
+                    alert("Please enter a valid GitHub repository URL.");
+                    return;
+                }
+                requestPayload.repo_url = repoUrl;
+            } else {
+                if (!localPath) {
+                    alert("Please enter a local directory path.");
+                    return;
+                }
+                requestPayload.local_path = localPath;
+            }
+            
+            // Clean UI states
+            document.getElementById('console-logs').innerHTML = "";
+            appendConsoleLog("[INFO] Starting supply chain verification workflow...", "info");
+            
+            btnScan.disabled = true;
+            btnScan.innerHTML = `<span class="spinner-container"><span class="spinner"></span></span> Scanning...`;
+            
+            // Reset statistics widgets
+            const widgetVerdict = document.getElementById('widget-verdict');
+            widgetVerdict.className = "summary-widget verdict-widget";
+            document.getElementById('val-verdict').textContent = "RUNNING";
+            document.getElementById('val-deps').textContent = "0";
+            document.getElementById('val-vulns').textContent = "0";
+            document.getElementById('val-risk').textContent = "-";
+            document.getElementById('val-risk').className = "widget-value";
+            
+            // Reset drawer and download report
+            closeDrawer();
+            document.getElementById('btn-download-report').disabled = true;
+            
+            try {
+                const response = await fetch('/api/scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestPayload)
+                });
+                
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.detail || "Scanning trigger failed.");
+                }
+                
+                const scanTask = await response.json();
+                currentScanId = scanTask.scan_id;
+                
+                // Clear any existing pollers
+                if (pollingInterval) clearInterval(pollingInterval);
+                
+                // Begin status polling
+                let lastLogIndex = 0;
+                pollingInterval = setInterval(async () => {
+                    const pollRes = await fetch(`/api/scan/${currentScanId}`);
+                    const pollData = await pollRes.json();
+                    
+                    // Display new logs in console
+                    if (pollData.logs && pollData.logs.length > lastLogIndex) {
+                        for (let i = lastLogIndex; i < pollData.logs.length; i++) {
+                            const rawLog = pollData.logs[i];
+                            let type = 'info';
+                            if (rawLog.startsWith('[ERROR]')) type = 'error';
+                            else if (rawLog.startsWith('[WARNING]')) type = 'warning';
+                            else if (rawLog.startsWith('[SUCCESS]')) type = 'success';
+                            
+                            appendConsoleLog(rawLog, type);
+                        }
+                        lastLogIndex = pollData.logs.length;
+                    }
+                    
+                    if (pollData.status === 'completed') {
+                        clearInterval(pollingInterval);
+                        finalizeScan(pollData.result);
+                    } else if (pollData.status === 'failed') {
+                        clearInterval(pollingInterval);
+                        appendConsoleLog(`[ERROR] Supply chain scan task aborted: ${pollData.error}`, 'error');
+                        btnScan.disabled = false;
+                        btnScan.textContent = "Scan Repository";
+                        
+                        document.getElementById('val-verdict').textContent = "ABORTED";
+                        widgetVerdict.className = "summary-widget verdict-widget fail";
+                    }
+                }, 1000);
+                
+            } catch (err) {
+                appendConsoleLog(`[ERROR] Scan initialization failed: ${err.message}`, 'error');
+                btnScan.disabled = false;
+                btnScan.textContent = "Scan Repository";
+                
+                document.getElementById('val-verdict').textContent = "ERROR";
+                widgetVerdict.className = "summary-widget verdict-widget fail";
+            }
+        }
+
+        // Fill stats, table, and network graph on complete scan
+        function finalizeScan(result) {
+            const btnScan = document.getElementById('btn-scan');
+            btnScan.disabled = false;
+            btnScan.textContent = "Scan Repository";
+            
+            const verdict = result.verdict;
+            const summary = verdict.summary;
+            
+            fullDependenciesData = result.dependencies;
+            
+            // 1. Update stats cards
+            const verdictEl = document.getElementById('val-verdict');
+            const widgetVerdict = document.getElementById('widget-verdict');
+            
+            verdictEl.textContent = verdict.status;
+            widgetVerdict.className = `summary-widget verdict-widget ${verdict.status.toLowerCase()}`;
+            
+            const slsa = result.slsa_provenance || {};
+            document.getElementById('val-slsa').textContent = slsa.level_name || 'Level 0';
+
+            document.getElementById('val-deps').textContent = summary.total_dependencies;
+            document.getElementById('val-vulns').textContent = summary.vulnerabilities.total;
+            
+            const riskEl = document.getElementById('val-risk');
+            riskEl.textContent = `${verdict.risk_index}/100`;
+            if (verdict.risk_index >= 60) {
+                riskEl.className = "widget-value risk-index-high";
+            } else if (verdict.risk_index >= 30) {
+                riskEl.className = "widget-value risk-index-med";
+            } else {
+                riskEl.className = "widget-value risk-index-low";
+            }
+            
+            // 2. Enable reports download
+            document.getElementById('btn-download-report').disabled = false;
+            
+            // 3. Render Dependency Table catalog
+            renderCatalogTable(result.dependencies);
+            
+            // 4. Draw network graph canvas
+            renderNetworkGraph(result.graph);
+        }
+
+        // Draw Vis-Network Graph
+        function renderNetworkGraph(graphData) {
+            const container = document.getElementById('graph-canvas');
+            container.innerHTML = ""; // Clear loader
+            
+            visNodesDataset = new vis.DataSet(graphData.nodes);
+            const data = {
+                nodes: visNodesDataset,
+                edges: new vis.DataSet(graphData.edges)
+            };
+            
+            const options = {
+                physics: {
+                    solver: 'forceAtlas2Based',
+                    forceAtlas2Based: {
+                        gravitationalConstant: -26,
+                        centralGravity: 0.005,
+                        springLength: 120,
+                        springConstant: 0.18
+                    },
+                    maxVelocity: 146,
+                    stabilization: {
+                        enabled: true,
+                        iterations: 150
+                    }
+                },
+                interaction: {
+                    hover: true,
+                    tooltipDelay: 200,
+                    selectable: true
+                },
+                nodes: {
+                    font: {
+                        color: '#f3f4f6',
+                        size: 11,
+                        face: 'Inter'
+                    },
+                    borderWidth: 2,
+                    shadow: true
+                },
+                edges: {
+                    width: 1.5,
+                    shadow: false
+                }
+            };
+            
+            visNetworkInstance = new vis.Network(container, data, options);
+            
+            // Bind graph click handlers
+            visNetworkInstance.on("click", (params) => {
+                if (params.nodes.length > 0) {
+                    const selectedNodeId = params.nodes[0];
+                    showPackageDetails(selectedNodeId);
+                } else {
+                    closeDrawer();
+                }
+            });
+        }
+
+        // Render Table Catalog
+        function renderCatalogTable(dependencies) {
+            const tableBody = document.getElementById('deps-table-body');
+            tableBody.innerHTML = "";
+            
+            if (dependencies.length === 0) {
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="6" style="text-align:center; color: var(--color-text-dim); padding: 30px;">
+                            No dependencies found.
+                        </td>
+                    </tr>`;
+                return;
+            }
+            
+            // Sort by risk desc
+            const sorted = [...dependencies].sort((a, b) => b.risk_score - a.risk_score);
+            
+            sorted.forEach(dep => {
+                const tr = document.createElement('tr');
+                tr.setAttribute('onclick', `selectPackageRow('${dep.name}', '${dep.version}')`);
+                
+                const sigBadge = dep.signature_verified 
+                    ? `<span class="badge badge-secure">Verified (${dep.signature_type})</span>`
+                    : `<span class="badge badge-danger">Unsigned</span>`;
+                    
+                const vulnBadge = dep.vulnerabilities.length > 0
+                    ? `<span class="badge badge-danger">${dep.vulnerabilities.length} CVEs</span>`
+                    : `<span class="badge badge-secure">Clean</span>`;
+                    
+                let riskColorClass = "risk-index-low";
+                if (dep.risk_score >= 60) riskColorClass = "risk-index-high";
+                else if (dep.risk_score >= 30) riskColorClass = "risk-index-med";
+                
+                tr.innerHTML = `
+                    <td><strong>${dep.name}</strong></td>
+                    <td>${dep.version}</td>
+                    <td>${dep.ecosystem}</td>
+                    <td>${sigBadge}</td>
+                    <td>${vulnBadge}</td>
+                    <td class="${riskColorClass}" style="font-weight:bold;">${dep.risk_score}/100</td>
+                `;
+                tableBody.appendChild(tr);
+            });
+        }
+
+        // Show details in the drawer
+        function showPackageDetails(nodeId) {
+            // Find dependency data
+            const dep = fullDependenciesData.find(d => `${d.name}@${d.version}` === nodeId);
+            if (!dep) return;
+            
+            document.getElementById('drawer-empty-state').style.display = "none";
+            const content = document.getElementById('drawer-content');
+            content.style.display = "block";
+            
+            document.getElementById('drawer-pkg-name').textContent = dep.name;
+            document.getElementById('drawer-pkg-version').textContent = `Version ${dep.version}`;
+            document.getElementById('drawer-pkg-ecosystem').textContent = dep.ecosystem;
+            
+            // Signatures
+            const sigBadge = document.getElementById('drawer-sig-badge');
+            const sigDetails = document.getElementById('drawer-sig-details');
+            if (dep.signature_verified) {
+                sigBadge.className = "badge badge-secure";
+                sigBadge.textContent = `Verified: ${dep.signature_type}`;
+                sigDetails.textContent = dep.signature_details;
+            } else {
+                sigBadge.className = "badge badge-danger";
+                sigBadge.textContent = "Unsigned / Untrusted";
+                sigDetails.textContent = dep.signature_details || "No digital signatures or attestations could be cryptographically verified.";
+            }
+            
+            // Vulnerabilities list
+            const vulnContainer = document.getElementById('drawer-vuln-container');
+            vulnContainer.innerHTML = "";
+            
+            if (dep.vulnerabilities.length === 0) {
+                vulnContainer.innerHTML = '<span style="color:var(--color-secure); font-weight:600;">✔️ Clean. No known CVE advisories.</span>';
+            } else {
+                const list = document.createElement('div');
+                list.className = "cve-drawer-list";
+                
+                dep.vulnerabilities.forEach(v => {
+                    const card = document.createElement('div');
+                    card.className = `cve-card severity-${v.severity}`;
+                    card.innerHTML = `
+                        <div class="cve-card-header">
+                            <span class="cve-name">${v.cve_id}</span>
+                            <span class="cve-score">${v.severity} (CVSS: ${v.cvss_score})</span>
+                        </div>
+                        <div class="cve-summary">${v.summary}</div>
+                        <div class="cve-fixed-version">Fixed version: ${v.fixed_version}</div>
+                    `;
+                    list.appendChild(card);
+                });
+                vulnContainer.appendChild(list);
+            }
+        }
+
+        function closeDrawer() {
+            document.getElementById('drawer-empty-state').style.display = "flex";
+            document.getElementById('drawer-content').style.display = "none";
+        }
+
+        // Table search filter
+        function filterTable() {
+            const query = document.getElementById('search-bar').value.toLowerCase();
+            const rows = document.querySelectorAll('#deps-table-body tr');
+            
+            rows.forEach(row => {
+                const text = row.innerText.toLowerCase();
+                if (text.includes(query)) {
+                    row.style.display = "";
+                } else {
+                    row.style.display = "none";
+                }
+            });
+        }
+
+        // Handle table row click -> select package node in visualizer and drawer
+        function selectPackageRow(name, version) {
+            const nodeId = `${name}@${version}`;
+            if (visNetworkInstance && visNodesDataset.get(nodeId)) {
+                visNetworkInstance.selectNodes([nodeId]);
+                visNetworkInstance.focus(nodeId, {
+                    scale: 1.1,
+                    animation: {
+                        duration: 500,
+                        easingFunction: 'easeInOutQuad'
+                    }
+                });
+                showPackageDetails(nodeId);
+            }
+        }
+
+        // Graph navigation controls
+        function resetGraphView() {
+            if (visNetworkInstance) {
+                visNetworkInstance.fit({
+                    animation: {
+                        duration: 500,
+                        easingFunction: 'easeInOutQuad'
+                    }
+                });
+            }
+        }
+
+        function zoomGraph(factor) {
+            if (visNetworkInstance) {
+                const currentScale = visNetworkInstance.getScale();
+                visNetworkInstance.moveTo({
+                    scale: currentScale * factor,
+                    animation: {
+                        duration: 300,
+                        easingFunction: 'easeOutQuad'
+                    }
+                });
+            }
+        }
+
+        // Open Printable HTML Security report in a new tab
+        function downloadReport() {
+            if (currentScanId) {
+                window.open(`/api/report/${currentScanId}`, '_blank');
+            }
+        }
+
+        // SBOM Diff Modal Functions
+        async function openDiffModal() {
+            try {
+                const res = await fetch('/api/scans');
+                const scansList = await res.json();
+                
+                const baseSelect = document.getElementById('diff-base-select');
+                const headSelect = document.getElementById('diff-head-select');
+                
+                baseSelect.innerHTML = "";
+                headSelect.innerHTML = "";
+                
+                if (scansList.length === 0) {
+                    alert("No completed scans available to compare. Please run at least two scans first!");
+                    return;
+                }
+                
+                scansList.forEach((s, idx) => {
+                    const opt1 = document.createElement('option');
+                    opt1.value = s.id;
+                    opt1.textContent = `${s.repo_url} (Risk: ${s.risk_index}/100, Deps: ${s.total_dependencies})`;
+                    baseSelect.appendChild(opt1);
+                    
+                    const opt2 = document.createElement('option');
+                    opt2.value = s.id;
+                    opt2.textContent = `${s.repo_url} (Risk: ${s.risk_index}/100, Deps: ${s.total_dependencies})`;
+                    headSelect.appendChild(opt2);
+                });
+                
+                if (scansList.length > 1) {
+                    headSelect.selectedIndex = 1;
+                }
+                
+                document.getElementById('diff-modal').style.display = "flex";
+            } catch (err) {
+                alert("Error loading scans list for diff: " + err.message);
+            }
+        }
+
+        function closeDiffModal() {
+            document.getElementById('diff-modal').style.display = "none";
+        }
+
+        async function runSbomDiff() {
+            const baseId = document.getElementById('diff-base-select').value;
+            const headId = document.getElementById('diff-head-select').value;
+            
+            if (baseId === headId) {
+                alert("Please select two different scans to compare!");
+                return;
+            }
+            
+            try {
+                const res = await fetch('/api/scan/diff', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ base_scan_id: baseId, head_scan_id: headId })
+                });
+                
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || "Diff computation failed.");
+                }
+                
+                const diff = await res.json();
+                
+                document.getElementById('diff-results-container').style.display = "block";
+                document.getElementById('diff-added-count').textContent = `+${diff.summary.added_count}`;
+                document.getElementById('diff-removed-count').textContent = `-${diff.summary.removed_count}`;
+                document.getElementById('diff-updated-count').textContent = `~${diff.summary.updated_count}`;
+                
+                const riskDeltaEl = document.getElementById('diff-risk-delta');
+                const deltaStr = diff.risk_delta >= 0 ? `+${diff.risk_delta}` : `${diff.risk_delta}`;
+                riskDeltaEl.textContent = deltaStr;
+                riskDeltaEl.className = diff.risk_delta > 0 ? "widget-value risk-index-high" : "widget-value risk-index-low";
+                
+                // Render table of diffs
+                const area = document.getElementById('diff-tables-area');
+                let html = `<h4>Added Dependencies (+${diff.added_dependencies.length})</h4>`;
+                if (diff.added_dependencies.length > 0) {
+                    html += `<ul style="margin-bottom:15px; padding-left:20px; font-size:13px; line-height:1.8;">`;
+                    diff.added_dependencies.forEach(d => {
+                        html += `<li><span class="diff-badge-added">+ Added</span> <strong>${d.name}</strong> @ ${d.version} (${d.ecosystem})</li>`;
+                    });
+                    html += `</ul>`;
+                } else {
+                    html += `<p style="font-size:12px; color:var(--color-text-dim); margin-bottom:15px;">No new dependencies added.</p>`;
+                }
+                
+                html += `<h4>Removed Dependencies (-${diff.removed_dependencies.length})</h4>`;
+                if (diff.removed_dependencies.length > 0) {
+                    html += `<ul style="margin-bottom:15px; padding-left:20px; font-size:13px; line-height:1.8;">`;
+                    diff.removed_dependencies.forEach(d => {
+                        html += `<li><span class="diff-badge-removed">- Removed</span> <strong>${d.name}</strong> @ ${d.version} (${d.ecosystem})</li>`;
+                    });
+                    html += `</ul>`;
+                } else {
+                    html += `<p style="font-size:12px; color:var(--color-text-dim); margin-bottom:15px;">No dependencies removed.</p>`;
+                }
+
+                html += `<h4>Updated Version Dependencies (~${diff.updated_dependencies.length})</h4>`;
+                if (diff.updated_dependencies.length > 0) {
+                    html += `<ul style="padding-left:20px; font-size:13px; line-height:1.8;">`;
+                    diff.updated_dependencies.forEach(d => {
+                        html += `<li><span class="diff-badge-updated">~ Updated</span> <strong>${d.name}</strong>: ${d.old_version} ➔ ${d.new_version}</li>`;
+                    });
+                    html += `</ul>`;
+                } else {
+                    html += `<p style="font-size:12px; color:var(--color-text-dim);">No dependency versions changed.</p>`;
+                }
+                
+                area.innerHTML = html;
+            } catch (err) {
+                alert("Failed to compute diff: " + err.message);
+            }
+        }
+    </script>
+
+    <!-- SBOM Diff Modal -->
+    <div class="modal-overlay" id="diff-modal" style="display:none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 class="section-title" style="margin-bottom:0;">Supply Chain Drift & SBOM Diff</h3>
+                <button class="btn-icon" onclick="closeDiffModal()">❌</button>
+            </div>
+            <div class="modal-body">
+                <div style="display:flex; gap:15px; align-items:flex-end;">
+                    <div style="flex:1;">
+                        <label>Base Scan (Older)</label>
+                        <select id="diff-base-select" class="select-box"></select>
+                    </div>
+                    <div style="flex:1;">
+                        <label>Head Scan (Newer)</label>
+                        <select id="diff-head-select" class="select-box"></select>
+                    </div>
+                    <button class="btn-primary" style="width:auto;" onclick="runSbomDiff()">Compute Diff</button>
+                </div>
+
+                <div id="diff-results-container" style="display:none;">
+                    <div class="diff-stats-grid">
+                        <div class="diff-stat-card">
+                            <div class="widget-value" style="color:var(--color-secure);" id="diff-added-count">0</div>
+                            <div class="widget-label">Added Packages</div>
+                        </div>
+                        <div class="diff-stat-card">
+                            <div class="widget-value" style="color:var(--color-danger);" id="diff-removed-count">0</div>
+                            <div class="widget-label">Removed Packages</div>
+                        </div>
+                        <div class="diff-stat-card">
+                            <div class="widget-value" style="color:var(--color-warning);" id="diff-updated-count">0</div>
+                            <div class="widget-label">Version Updates</div>
+                        </div>
+                        <div class="diff-stat-card">
+                            <div class="widget-value" id="diff-risk-delta">0</div>
+                            <div class="widget-label">Risk Index Delta</div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top:20px;" id="diff-tables-area"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
